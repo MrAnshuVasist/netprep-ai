@@ -36,6 +36,9 @@ button.pri{background:var(--ink);color:var(--paper)}button.pri.big{width:100%;ma
  <div class="hero"><h1>UGC NET AI Study Assistant</h1><p>Turn any UGC NET YouTube class into one-page revision notes and UGC NET-level practice questions.</p></div>
  <label for="url" class="tag">Paste your UGC NET YouTube Class Link</label>
  <input id="url" placeholder="https://youtube.com/watch?v=................" autocomplete="off">
+ <details style="margin-top:10px"><summary class="tag" style="cursor:pointer">Captions not working? Paste the transcript instead</summary>
+ <p class="tag">On YouTube: open the video, click ...more under the description, then Show transcript. Select all, copy, and paste it here.</p>
+ <textarea id="tr" rows="6" style="width:100%;padding:12px;font:inherit;border:2px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)"></textarea></details>
  <button class="pri big" id="go">Generate UGC NET Study Material</button>
  <div class="err" id="err" role="alert"></div>
  <ul class="ticks"><li>UGC NET Level Questions</li><li>Based on Your Video</li><li>One-Page Revision Notes</li><li>Instant Quiz</li><li>Detailed Explanations</li><li>Download PDF</li></ul>
@@ -55,7 +58,7 @@ button.pri{background:var(--ink);color:var(--paper)}button.pri.big{width:100%;ma
 </section>
 
 <section id="result" class="hide"></section>
-<footer class="noprint" style="text-align:center;padding:24px;color:var(--mut)">Created by Anshu Sharma</footer></main>
+</main>
 <script>
 const $=s=>document.querySelector(s),esc=t=>String(t??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 let D,ans=[],rev=[],cur=0;
@@ -63,9 +66,9 @@ const L=["A","B","C","D"];
 function show(id){["home","load","notesPage","quiz","result"].forEach(x=>$("#"+x).classList.toggle("hide",x!==id))}
 $("#go").onclick=async()=>{
  $("#err").textContent="";show("load");
- try{const r=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:$("#url").value})});
+ try{const r=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:$("#url").value,transcript:$("#tr").value})});
   const j=await r.json();if(!r.ok)throw new Error(j.error);D=j;renderNotes();show("notesPage")}
- catch(e){show("home");$("#err").textContent=e.message}
+ catch(e){show("home");$("#err").textContent=e.message;if(/Transcript unavailable/.test(e.message))document.querySelector("details").open=true}
 };
 const SEC=[["core_concepts","Core Concepts"],["definitions","Important Definitions"],["scholars","Thinkers / Scholars"],["theories","Theories / Concepts"],["important_facts","Important Facts"],["comparisons","Comparisons"],["important_statements","Important Statements"],["exam_traps","Exam Traps"],["memory_tricks","Memory Tricks"],["quick_revision","UGC NET Quick Revision"]];
 function renderNotes(){
@@ -146,21 +149,24 @@ function videoId(url) {
 async function generate(reqBody, res) {
   const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
   const id = videoId(reqBody?.url || "");
-  if (!id) return send(400, { error: "Please paste a valid YouTube link." });
+  const pasted = String(reqBody?.transcript || "").replace(/\s+/g, " ").trim();
+  if (!id && pasted.length < 300) return send(400, { error: "Please paste a valid YouTube link." });
 
-  let text;
-  try {
+  let text = pasted;
+  if (pasted.length < 300) try {
     const parts = await YoutubeTranscript.fetchTranscript(id);
     text = parts.map((p) => p.text).join(" ").replace(/\s+/g, " ");
-    if (text.length < 300) throw new Error("short");
-  } catch {
+    if (text.length < 300) throw new Error("Transcript too short");
+  } catch (e) {
+    console.error("Transcript error:", id, e.message);
     return send(422, {
+      needPaste: true,
       error: "Transcript unavailable for this video. Please try another UGC NET class with captions.",
     });
   }
 
-  let video = { title: "", video_id: id, channel: "" };
-  try {
+  let video = { title: "", video_id: id || "", channel: "" };
+  if (id) try {
     const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
     if (o.ok) { const j = await o.json(); video.title = j.title; video.channel = j.author_name; }
   } catch {}
