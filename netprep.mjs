@@ -65,10 +65,10 @@ let D,ans=[],rev=[],cur=0;
 const L=["A","B","C","D"];
 function show(id){["home","load","notesPage","quiz","result"].forEach(x=>$("#"+x).classList.toggle("hide",x!==id))}
 $("#go").onclick=async()=>{
- $("#err").textContent="";show("load");
+ $("#err").textContent="";show("load");console.log("[NETPrep] Generate clicked. url:",$("#url").value,"| pasted chars:",$("#tr").value.length);
  try{const r=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:$("#url").value,transcript:$("#tr").value})});
-  const j=await r.json();if(!r.ok)throw new Error(j.error);D=j;renderNotes();show("notesPage")}
- catch(e){show("home");$("#err").textContent=e.message;if(/Transcript unavailable/.test(e.message))document.querySelector("details").open=true}
+  const j=await r.json();console.log("[NETPrep] Server response status:",r.status,j);if(!r.ok)throw new Error(j.error);D=j;renderNotes();show("notesPage")}
+ catch(e){console.error("[NETPrep] Client error:",e);show("home");$("#err").textContent=e.message;if(/Transcript unavailable/.test(e.message))document.querySelector("details").open=true}
 };
 const SEC=[["core_concepts","Core Concepts"],["definitions","Important Definitions"],["scholars","Thinkers / Scholars"],["theories","Theories / Concepts"],["important_facts","Important Facts"],["comparisons","Comparisons"],["important_statements","Important Statements"],["exam_traps","Exam Traps"],["memory_tricks","Memory Tricks"],["quick_revision","UGC NET Quick Revision"]];
 function renderNotes(){
@@ -147,31 +147,49 @@ function videoId(url) {
 }
 
 async function generate(reqBody, res) {
-  const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const t0 = Date.now();
+  const log = (...a) => console.log(`[NETPrep +${Date.now() - t0}ms]`, ...a);
+  const send = (code, obj) => { log("Sending response, status:", code, obj.error ? "error: " + obj.error : "OK"); res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+  log("1. Request received. url:", reqBody?.url, "| pasted transcript chars:", String(reqBody?.transcript || "").length);
+  log("2. Env check. OPENAI_API_KEY set:", !!process.env.OPENAI_API_KEY, "| model:", process.env.OPENAI_MODEL || "gpt-4o (default)", "| node:", process.version);
+
   const id = videoId(reqBody?.url || "");
+  log("3. Extracted video id:", id);
   const pasted = String(reqBody?.transcript || "").replace(/\s+/g, " ").trim();
   if (!id && pasted.length < 300) return send(400, { error: "Please paste a valid YouTube link." });
 
   let text = pasted;
-  if (pasted.length < 300) try {
-    const parts = await YoutubeTranscript.fetchTranscript(id);
-    text = parts.map((p) => p.text).join(" ").replace(/\s+/g, " ");
-    if (text.length < 300) throw new Error("Transcript too short");
-  } catch (e) {
-    console.error("Transcript error:", id, e.message);
-    return send(422, {
-      needPaste: true,
-      error: "Transcript unavailable for this video. Please try another UGC NET class with captions.",
-    });
+  if (pasted.length >= 300) {
+    log("4. Using pasted transcript, chars:", pasted.length);
+  } else {
+    try {
+      log("4. Fetching YouTube transcript for", id);
+      const parts = await YoutubeTranscript.fetchTranscript(id);
+      log("5. Transcript fetched. segments:", parts?.length, "| first segment:", JSON.stringify(parts?.[0]));
+      text = parts.map((p) => p.text).join(" ").replace(/\s+/g, " ");
+      log("6. Transcript joined. chars:", text.length);
+      if (text.length < 300) throw new Error("Transcript too short: " + text.length + " chars");
+    } catch (e) {
+      log("TRANSCRIPT FAILED. name:", e.name, "| message:", e.message);
+      log("TRANSCRIPT STACK:", e.stack);
+      return send(422, {
+        needPaste: true,
+        error: "Transcript unavailable for this video. Please try another UGC NET class with captions.",
+      });
+    }
   }
 
   let video = { title: "", video_id: id || "", channel: "" };
   if (id) try {
+    log("7. Fetching oEmbed title");
     const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
-    if (o.ok) { const j = await o.json(); video.title = j.title; video.channel = j.author_name; }
-  } catch {}
+    log("8. oEmbed status:", o.status);
+    if (o.ok) { const j = await o.json(); video.title = j.title; video.channel = j.author_name; log("9. Title:", video.title, "| channel:", video.channel); }
+  } catch (e) { log("oEmbed failed (non-fatal):", e.message); }
 
   try {
+    log("10. Calling OpenAI. transcript chars sent:", Math.min(text.length, 90000));
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
@@ -185,20 +203,27 @@ async function generate(reqBody, res) {
         ],
       }),
     });
+    log("11. OpenAI HTTP status:", r.status);
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error?.message || "OpenAI error");
+    if (!r.ok) { log("OPENAI ERROR BODY:", JSON.stringify(j)); throw new Error(j.error?.message || "OpenAI error"); }
+    log("12. OpenAI usage:", JSON.stringify(j.usage), "| finish_reason:", j.choices?.[0]?.finish_reason);
     const data = JSON.parse(j.choices[0].message.content);
+    log("13. JSON parsed. questions from model:", data.questions?.length, "| topic:", data.topic);
     data.questions = (data.questions || []).filter(
       (q) => q.options?.length === 4 && Number.isInteger(q.correct_answer) && q.correct_answer >= 0 && q.correct_answer < 4
     ).map((q) => ({ ...q, type: "AI_VIDEO_BASED_UGC_NET" }));
+    log("14. Valid questions after filter:", data.questions.length);
     if (!data.questions.length) throw new Error("No valid questions generated");
     send(200, { video, pyqs: [], ...data }); // pyqs stays empty until a verified PYQ database is connected
   } catch (e) {
+    log("GENERATION FAILED:", e.name, e.message);
+    log("GENERATION STACK:", e.stack);
     send(500, { error: "Generation failed: " + e.message });
   }
 }
 
 http.createServer((req, res) => {
+  console.log("[NETPrep] HTTP", req.method, req.url);
   if (req.method === "POST" && req.url === "/api/generate") {
     let raw = "";
     req.on("data", (c) => (raw += c));
