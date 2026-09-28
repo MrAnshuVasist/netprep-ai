@@ -1,0 +1,7 @@
+{
+  "name": "netprep-ai",
+  "version": "1.0.0",
+  "scripts": { "start": "node netprep.mjs" },
+  "dependencies": { "youtube-transcript": "^1.2.1" },
+  "engines": { "node": ">=18" }
+}
