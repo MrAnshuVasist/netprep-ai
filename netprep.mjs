@@ -55,7 +55,7 @@ button.pri{background:var(--ink);color:var(--paper)}button.pri.big{width:100%;ma
 </section>
 
 <section id="result" class="hide"></section>
-</main>
+<footer class="noprint" style="text-align:center;padding:24px;color:var(--mut)">Created by Anshu Sharma</footer></main>
 <script>
 const $=s=>document.querySelector(s),esc=t=>String(t??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 let D,ans=[],rev=[],cur=0;
